@@ -24,6 +24,7 @@ if ! which wafw00f > /dev/null; then
     git clone https://github.com/EnableSecurity/wafw00f.git
     cd wafw00f/
     python3 setup.py install
+    cd ..
 fi
 if ! which nuclei > /dev/null; then
     go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
@@ -36,5 +37,7 @@ if ! which ddgs > /dev/null; then
 fi
 if ! which github-subdomains > /dev/null; then
     go install github.com/gwen001/github-subdomains@latest
-    go github-subdomains/install
+    cd github-subdomains
+    go install
+    cd ..
 fi
