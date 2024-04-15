@@ -45,6 +45,7 @@ while [[ "$#" -gt 0 ]]; do
         -ks|--kitchensink) KITCHENSINK="1" ;;
         -l|--silent) SILENT="1";exec > /dev/null ;;
         -n|--asn) ASN="1" ;;
+	-s|--asnss) ASNSS="1";;
         -p|--port) PORTSCAN="1" ;;
         -r|--report) REPORTING="1" ;;
         -s|--scan) DOSCAN="1" ;;
@@ -71,6 +72,7 @@ if [[ $SHOWHELP == "1" ]]; then
         echo "-ks|--kitchensink	Throw the kitchen sink at it. Use all available parameters except Tor."
         echo "-l|--silent       Silent mode.  ie., Don't send stdout to your terminal."
 	echo "-n|--asn          Find the ASN or hosting information for all assets."
+	echo "-s|--asnss        Scan the entire range of the ASN to resolve extra subdomains.  This will make the script MUCH slower."
 	echo "-p|--port         Port scan the assets using Naabu."
 	echo "-r|--report       Send the output to the Elasticsearch reporting server."
 	echo "-s|--scan         Scan the target with Nuclei."
@@ -131,6 +133,7 @@ if [[ $KITCHENSINK == "1" ]];then
 	CLOUD="1";
 	KITCHENSINK="1";
 	ASN="1";
+	ASNSS="1";
 	PORTSCAN="1";
 	HEADERS="1";
 	REPORTING="1";
@@ -168,6 +171,57 @@ if [[ -z $INPUT ]]; then
         #github-subdomains -raw -d $DOMAIN -t $GITHUBTOKEN >> $OUT.raw
         github-subdomains -raw -d $DOMAIN -t $GITHUBTOKEN -o $OUT.raw
         if [[ $USEAMASS == "1" ]]; then amass enum -d $DOMAIN >> $OUT.raw;fi
+
+	if [[ $ASNSS == "1" ]]; then
+
+		ip_to_int() {
+	    	local ip="$1"
+	    	IFS=. read -r i1 i2 i3 i4 <<< "$ip"
+	    	echo "$(( (i1<<24) + (i2<<16) + (i3<<8) + i4 ))"
+		}
+
+		int_to_ip() {
+		    local int="$1"
+		    echo "$(( (int>>24)&255 )).$(( (int>>16)&255 )).$(( (int>>8)&255 )).$(( int&255 ))"
+		}
+
+		# Get ASN data base 
+		if [ ! -e "ip2asn-v4.tsv" ]; then
+		    wget https://iptoasn.com/data/ip2asn-v4.tsv.gz 2> /dev/null
+		    gunzip ip2asn-v4.tsv.gz 2> /dev/null
+		fi
+
+		# Get comany's ASN 
+		COMPANY=$(echo $DOMAIN | awk -F "." '{print$1}')
+	  	ddgs text -k "$DOMAIN asn ip info" -m 10 -o csv
+	   	cat *.csv | grep -o 'AS[0-9]\+'  | awk -F "S" '{print $2}' | sort -u > potentialASN
+
+	   	# Check if ASN is in database
+	    	while read ASNRESULT; do
+	    	cat ip2asn-v4.tsv | grep -i "$ASNRESULT" | grep -i "$COMPANY" | awk -F " " '{print $1" "$2}' >> ipRange.tmp
+	   	done<potentialASN
+	    	cat ipRange.tmp | sort -u > ipRange
+	    
+
+	    	# Converts the range of IP adresses to a list IP addresses. 
+		if [ -s ipRange ] ; then
+		    	while read line; do
+		        start_ip=$(echo $line | awk -F " " '{print $1}')
+		        end_ip=$(echo $line | awk -F " " '{print $2}')
+		        start_int=$(ip_to_int "$start_ip")
+		        end_int=$(ip_to_int "$end_ip")
+		     	for ((int = start_int; int <= end_int; int++)); do
+		    		current_ip=$(int_to_ip "$int")
+		    		echo "$current_ip" >> ipList
+		    		done
+		    	done < ipRange
+
+		    	# Performs reverse DNS lookup on all IP's in range.
+		    	cat ipList | hakip2host | sort -u >> tmp
+		    	cat tmp | awk -F " " '{print$3}' | sort -u | grep -v "*" >> $OUT.raw
+		fi
+	rm *.csv tmp ipRange ipList potentialASN 2> /dev/null
+	fi
 
         cat $OUT.raw | sort -u | dnsx -silent >> $LIST
         cat $OUT.list | sort -u | httpx -silent >> $OUT.http
@@ -365,4 +419,3 @@ elif [[ -f $OUT.nuclei.json ]]; then
 fi
 if [[ -f $OUT.txt ]]; then rm $OUT.txt; fi
 if [[ -f $OUT.raw ]]; then rm $OUT.raw; fi
-
